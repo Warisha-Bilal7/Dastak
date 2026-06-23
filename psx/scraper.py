@@ -14,14 +14,6 @@ PSX EOD JSON format: {"status":1, "data": [[timestamp_s, close, volume, open], .
   - NO separate high/low in this endpoint (intraday has full OHLCV)
 """
 
-import sys
-# Force stdout to use UTF-8 on Windows to prevent UnicodeEncodeError
-if sys.stdout and sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-    except AttributeError:
-        pass
-
 import httpx
 import sqlite3
 import json
@@ -147,9 +139,6 @@ def fetch_price_history(symbol: str, start: str = None, end: str = None, use_cac
             })
         except (IndexError, TypeError, ValueError):
             continue
-
-    # Sort chronologically (oldest to newest) to ensure consistency with cached data
-    records.sort(key=lambda x: x["date"])
 
     if start: records = [r for r in records if r["date"] >= start]
     if end:   records = [r for r in records if r["date"] <= end]
@@ -478,7 +467,7 @@ if __name__ == "__main__":
 
     # Price history
     console.print("\n[bold]── Last 5 EOD Rows ──[/bold]")
-    prices = fetch_price_history(ticker)
+    prices = fetch_price_history(ticker, start=(date.today() - timedelta(days=30)).isoformat())
     if prices:
         t = Table()
         for col in ["Date", "Open", "Close", "Volume"]:
