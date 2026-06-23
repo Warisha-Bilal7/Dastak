@@ -19,11 +19,19 @@ import sqlite3
 import json
 import time
 import os
+import sys
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from bs4 import BeautifulSoup
 from rich.console import Console
 from rich.table import Table
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except AttributeError:
+        pass
 
 console = Console()
 
@@ -231,11 +239,116 @@ def fetch_market_watch(cache_minutes: int = 15) -> list[dict]:
     return records
 
 
-def get_quote(symbol: str) -> dict | None:
-    """Live quote for a single symbol."""
+def fetch_single_quote(symbol: str) -> dict | None:
+    """
+    Fetch and parse live quote directly from the company's page on PSX.
+    Useful fallback for delisted or less active stocks not in the market watch table.
+    """
     symbol = symbol.upper()
-    quotes = fetch_market_watch()
-    return next((q for q in quotes if q["symbol"] == symbol), None)
+    url = f"{BASE_URL}/company/{symbol}"
+    try:
+        html = _fetch(url)
+    except Exception as e:
+        console.print(f"[yellow]⚠ Failed to fetch company page for {symbol}: {e}[/yellow]")
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    quote_div = soup.find("div", class_="company__quote")
+    if not quote_div:
+        return None
+
+    # Sector
+    sector_span = quote_div.find("div", class_="quote__sector")
+    sector = sector_span.get_text(strip=True) if sector_span else ""
+
+    # Current Price
+    close_div = quote_div.find("div", class_="quote__close")
+    current = None
+    if close_div:
+        txt = close_div.get_text(strip=True).replace("Rs.", "").replace(",", "")
+        try:
+            current = float(txt)
+        except ValueError:
+            pass
+
+    # Change and Change Percent
+    change_div = quote_div.find("div", class_="quote__change")
+    change = None
+    change_pct = ""
+    if change_div:
+        is_neg = "change__text--neg" in change_div.get("class", [])
+        val_div = change_div.find("div", class_="change__value")
+        pct_div = change_div.find("div", class_="change__percent")
+        if val_div:
+            try:
+                change = float(val_div.get_text(strip=True).replace(",", ""))
+                if is_neg:
+                    change = -change
+            except ValueError:
+                pass
+        if pct_div:
+            change_pct = pct_div.get_text(strip=True)
+
+    # Stats tab (Open, High, Low, Volume, LDCP)
+    stats_tab = soup.find("div", id="statsTab")
+    open_val, high_val, low_val, vol_val, ldcp_val = None, None, None, None, None
+    if stats_tab:
+        reg_panel = stats_tab.find("div", class_="tabs__panel", attrs={"data-name": "REG"})
+        if reg_panel:
+            for item in reg_panel.find_all("div", class_="stats_item"):
+                lbl_div = item.find("div", class_="stats_label")
+                val_div = item.find("div", class_="stats_value")
+                if lbl_div and val_div:
+                    label = lbl_div.get_text(strip=True).upper()
+                    val_txt = val_div.get_text(strip=True).split("\n")[0].strip().replace(",", "")
+                    try:
+                        if "OPEN" in label:
+                            open_val = float(val_txt)
+                        elif "HIGH" in label:
+                            high_val = float(val_txt)
+                        elif "LOW" in label:
+                            low_val = float(val_txt)
+                        elif "VOLUME" in label:
+                            vol_val = int(float(val_txt))
+                        elif "LDCP" in label:
+                            ldcp_val = float(val_txt)
+                    except ValueError:
+                        pass
+
+    now = _now()
+    record = {
+        "symbol":     symbol,
+        "sector":     sector,
+        "ldcp":       ldcp_val,
+        "open":       open_val,
+        "high":       high_val,
+        "low":        low_val,
+        "current":    current,
+        "change":     change,
+        "change_pct": change_pct,
+        "volume":     vol_val,
+        "fetched_at": now,
+    }
+
+    conn = _get_db()
+    conn.execute("""
+        INSERT OR REPLACE INTO live_quotes
+        (symbol,sector,ldcp,open,high,low,current,change,change_pct,volume,fetched_at)
+        VALUES (:symbol,:sector,:ldcp,:open,:high,:low,:current,:change,:change_pct,:volume,:fetched_at)
+    """, record)
+    conn.commit()
+    return record
+
+
+def get_quote(symbol: str) -> dict | None:
+    """Live quote for a single symbol — queries SQLite directly after populating cache."""
+    symbol = symbol.upper()
+    fetch_market_watch()          # ensure cache is populated
+    conn = _get_db()
+    row  = conn.execute("SELECT * FROM live_quotes WHERE symbol=?", (symbol,)).fetchone()
+    if row:
+        return dict(row)
+    return fetch_single_quote(symbol)
 
 
 # ── Announcements (via psxterminal.com) ───────────────────────────────────────
@@ -467,7 +580,7 @@ if __name__ == "__main__":
 
     # Price history
     console.print("\n[bold]── Last 5 EOD Rows ──[/bold]")
-    prices = fetch_price_history(ticker, start=(date.today() - timedelta(days=30)).isoformat())
+    prices = fetch_price_history(ticker)   # no date filter — show all available data
     if prices:
         t = Table()
         for col in ["Date", "Open", "Close", "Volume"]:
