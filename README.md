@@ -247,7 +247,7 @@ PRs are welcome. Please open an issue first for significant changes. Highest-pri
 
 **Warisha Bilal** — ML Lead, [Cortexium](https://cortexium.ai) · UET Peshawar · Microsoft Learn Student Ambassador
 
-[github.com/Warisha-Bilal7](https://github.com/Warisha-Bilal7) · [linkedin.com/in/warisha-danin-bilal](https://linkedin.com/in/warisha-danin-bilal) · warishabilal05@gmail.com
+[github.com/Warisha-Bilal7](https://github.com/Warisha-Bilal7) · [linkedin.com/in/warisha-danin-bilal](https://linkedin.com/in/warisha-danin-bilal) · warishabilal05@gmail.com 24pwai0004@uetpeshawar.edu.pk
 
 ---
 
